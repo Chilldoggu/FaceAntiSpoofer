@@ -67,7 +67,7 @@ def extract_dataset_csv(csv_file: Path) -> tuple:
 def extract_faces(img, img_path: Path) -> tuple:
     face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, 1.1, 4) # 1.5 powinno być zkalibrowane w zależności od zdjęcia wejściowego
+    faces = face_cascade.detectMultiScale(gray, 2, 4) # 1.5 powinno być zkalibrowane w zależności od zdjęcia wejściowego
 
     labels = []
     cropped_imgs = []
@@ -116,38 +116,68 @@ def SVM_train(labels, embeddings):
 
 
 def compare_videos(video1: Path, video2: Path):
+    if not video1.exists():
+        print(f"{video_path1} doesn't exist!")
+    if not video2.exists():
+        print(f"{video_path2} doesn't exist!")
+
     cap1 = cv2.VideoCapture(video1)
     cap2 = cv2.VideoCapture(video2)
+    plot_data = {
+        'x' : [],
+        'y' : []
+        }
+    i = 1
     while cap1.isOpened() and cap2.isOpened():
         ret1, frame1 = cap1.read()
         ret2, frame2 = cap2.read()
-        frame1 = cv2.resize(frame1, (256, 256))
-        frame2 = cv2.resize(frame2, (256, 256))
         if not ret1 or not ret2:
             print("Can't receive frame from video stream")
             break
 
-        frame_cat = np.hstack((frame1, frame2)) 
-        cv2.imshow("Frame comparison", frame_cat)
-        input("Paused...")
+        if i % 5: # set fps
+            i += 1
+            continue
 
         _, lface1 = extract_faces(frame1, video1)
         _, lface2 = extract_faces(frame2, video2)
-        if len(lface1) != 1 or len(lface2) != 1:
+        if len(lface1) > 1 or len(lface2) > 1:
             print("Frame has more than one face!")
-            break
+
+        if lface1.size == 0 or lface2.size == 0:
+            print("Frame has none faces!")
+            continue
+
         face1 = lface1[0]
         face2 = lface2[0]
+        emb_face1 = get_embedding(face1)
+        emb_face2 = get_embedding(face2)
+        diff = g_embedder.compute_distance(emb_face1, emb_face2)
+        plot_data['x'].append(i)
+        plot_data['y'].append(diff)
+
+        frame_cat = np.hstack((face1, face2)) 
+        cv2.imshow("Frame comparison", frame_cat)
 
         if cv2.waitKey(1) == ord('q'):
             break
+        i += 1
+    
     cap1.release()
     cap2.release()
     cv2.destroyAllWindows()
 
+    plt.plot(plot_data['x'], plot_data['y'])
+    plt.xlabel('Frame num')
+    plt.ylabel('Embeddings difference')
+    plt.title('Embedding difference across video frames')
+    plt.show()
+
 
 if __name__ == "__main__":
-    compare_videos(Path().joinpath("Videos", "SpoofEmotions.mov"), Path().joinpath("Videos", "OriginalEmotions.mov"))
+    video_path1 = Path().joinpath("data", "Videos", "SpoofEmotions.mov")
+    video_path2 = Path().joinpath("data", "Videos", "OriginalEmotions.mov")
+    compare_videos(video_path1, video_path2)
 
 # ========================== EXAMPLES ========================
 # labels, imgs = load_dataset_csv(Path().cwd().joinpath("file_label.csv"))
