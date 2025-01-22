@@ -2,4 +2,6 @@ embeddings_faces.npz
 resources.txt
 file_label.csv
 venv*
-data/Videos
+input/Videos
+bin/ffmpeg.exe
+results/FrameComparison

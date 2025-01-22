@@ -2,48 +2,18 @@ import cv2
 import os
 import numpy as np
 import csv
+from mtcnn.mtcnn import MTCNN
 from pathlib import Path
 from matplotlib import pyplot as plt
 from keras_facenet import FaceNet
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
-from sklearn.preprocessing import LabelEncoder
-from sklearn.svm import SVC
+from matplotlib.animation import FFMpegWriter
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+plt.rcParams['animation.ffmpeg_path'] = 'E:\\PWr\\SEM5\\Biometria\\FaceAntiSpoofer\\bin\\ffmpeg.exe'
 
 g_embedder = FaceNet()
-g_lencoder = LabelEncoder()
-
-
-def load_image(img_path: Path):
-    img = cv2.imread(img_path)
-    img = cv2.resize(img, (160, 160))
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    return img
-
-
-def load_dataset_csv(csv_file: Path) -> list:
-    data = []
-    with open(csv_file, mode='r') as fp_csv:
-        csv_file = csv.reader(fp_csv, delimiter=";")
-        for lines in csv_file:
-            p = Path(lines[0])
-            if not p.exists():
-                raise Exception(f"Wrong image file path {p}")
-            data.append({'full_path': p, 'sub_num': lines[1]})
-    
-    imgs = []
-    labels = []
-    for field in data:
-        imgs.append(load_image(Path(field['full_path'])))
-        labels.append(f"{field['full_path'].parent}")
-    imgs = np.asarray(imgs)
-    labels = np.asarray(labels)
-    
-    return labels, imgs
-
+g_mtcnn_detector = MTCNN()
 
 def extract_dataset_csv(csv_file: Path) -> tuple:
     data = []
@@ -64,16 +34,20 @@ def extract_dataset_csv(csv_file: Path) -> tuple:
     return all_labels, all_results
 
 
-def extract_faces(img, img_path: Path) -> tuple:
-    face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, 2, 4) # 1.5 powinno być zkalibrowane w zależności od zdjęcia wejściowego
+def extract_faces(img, img_path: Path, scale_fact = 1.3, bgr2rgb = True) -> tuple:
+    # face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
+    # gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # faces = face_cascade.detectMultiScale(gray, scale_fact, 4) # drugi parametr powinien być zkalibrowany w zależności od zdjęcia wejściowego
+
+    faces = g_mtcnn_detector.detect_faces(img)
 
     labels = []
     cropped_imgs = []
-    for i, (x, y, w, h) in enumerate(faces):
+    for i, face in enumerate(faces):
+        (x, y, w, h) = face['box']
         crop = cv2.resize(img[y:y+h, x:x+w], (160, 160))
-        crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+        if bgr2rgb:
+            crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
         cropped_imgs.append(crop)
         labels.append(f"{img_path.parent}-{i}")
         # cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 3)
@@ -100,34 +74,21 @@ def get_embedding(face_img):
     return yhat[0]
 
 
-def SVM_train(labels, embeddings):
-    g_lencoder.fit(labels)
-    labels = g_lencoder.transform(labels)
-
-    # Training
-    IMG_train, IMG_test, LBL_train, LBL_test = train_test_split(embeddings, labels, shuffle=True, random_state=17)
-    model = SVC(kernel='linear', probability=True)
-    model.fit(IMG_train, LBL_train)
-    lbl_preds_train = model.predict(IMG_train)
-    lbl_preds_test = model.predict(IMG_test)
-
-    acc = accuracy_score(LBL_test, lbl_preds_test)
-    print(f"Accuracy: {acc*100}%")
-
-
-def compare_videos(video1: Path, video2: Path):
+def compare_videos(video1: Path, video2: Path, scale_fact = 1.3, result_path = Path()):
     if not video1.exists():
-        print(f"{video_path1} doesn't exist!")
+        print(f"{video1} doesn't exist!")
     if not video2.exists():
-        print(f"{video_path2} doesn't exist!")
+        print(f"{video2} doesn't exist!")
+    
+    if result_path.exists() is False:
+        result_path.mkdir(parents=True, exist_ok=True)
 
     cap1 = cv2.VideoCapture(video1)
     cap2 = cv2.VideoCapture(video2)
-    plot_data = {
-        'x' : [],
-        'y' : []
-        }
+    plot_data = { 'x' : [], 'y' : [] }
     i = 1
+    j = 0
+    err = 0
     while cap1.isOpened() and cap2.isOpened():
         ret1, frame1 = cap1.read()
         ret2, frame2 = cap2.read()
@@ -135,17 +96,14 @@ def compare_videos(video1: Path, video2: Path):
             print("Can't receive frame from video stream")
             break
 
-        if i % 5: # set fps
-            i += 1
-            continue
-
-        _, lface1 = extract_faces(frame1, video1)
-        _, lface2 = extract_faces(frame2, video2)
+        _, lface1 = extract_faces(frame1, video1, scale_fact, False)
+        _, lface2 = extract_faces(frame2, video2, scale_fact, False)
         if len(lface1) > 1 or len(lface2) > 1:
             print("Frame has more than one face!")
-
+            err += 1
         if lface1.size == 0 or lface2.size == 0:
             print("Frame has none faces!")
+            err += 1
             continue
 
         face1 = lface1[0]
@@ -157,47 +115,125 @@ def compare_videos(video1: Path, video2: Path):
         plot_data['y'].append(diff)
 
         frame_cat = np.hstack((face1, face2)) 
-        cv2.imshow("Frame comparison", frame_cat)
+        # cv2.imshow("Frame comparison", frame_cat)
+        cv2.imwrite(result_path.joinpath(f"{j}.png"), frame_cat)
+        j += 1
 
         if cv2.waitKey(1) == ord('q'):
             break
         i += 1
+    print(f"Errors num: {err} for scale detection: {scale_fact}")
     
     cap1.release()
     cap2.release()
     cv2.destroyAllWindows()
 
-    plt.plot(plot_data['x'], plot_data['y'])
-    plt.xlabel('Frame num')
-    plt.ylabel('Embeddings difference')
-    plt.title('Embedding difference across video frames')
-    plt.show()
+    plot_data['x'] = np.asarray(plot_data['x'])
+    plot_data['y'] = np.asarray(plot_data['y'])
+
+    return plot_data
+
+
+def process_videos():
+    filenames = [
+        "OrgUserNeutStas.mov",
+        "OrgDronNeutStas.mov",
+        "OrgUserEmotStas.mov",
+        "OrgDronEmotStas.mov",
+        "OrgUserNeutLukasz.mov",
+        "OrgDronNeutLukasz.mov",
+        "OrgUserEmotLukasz.mov",
+        "OrgDronEmotLukasz.mov",
+        "SpfUserNeutStas.mov",
+        "SpfDronNeutStas.mov",
+        "SpfUserEmotStas.mov",
+        "SpfDronEmotStas.mov",
+        "SpfUserNeutLukasz.mov",
+        "SpfDronNeutLukasz.mov",
+        "SpfUserEmotLukasz.mov",
+        "SpfDronEmotLukasz.mov",
+    ]
+    videos = [Path().joinpath("input", "Videos", file) for file in filenames]
+
+    # Pierwsza osoba w ciągu znaków odpowiada użytkownikowi
+    standard_usage = {
+        "StasNeut"   : compare_videos(videos[0], videos[1], 1.05, Path("results", "FrameComparison", "StandardUsage", "StasNeutral")),
+        "StasEmot"   : compare_videos(videos[2], videos[3], 1.05, Path("results", "FrameComparison", "StandardUsage", "StasEmotion")),
+        "LukaszNeut" : compare_videos(videos[4], videos[5], 1.05, Path("results", "FrameComparison", "StandardUsage", "LukaszNeutral")),
+        "LukaszEmot" : compare_videos(videos[6], videos[7], 1.05, Path("results", "FrameComparison", "StandardUsage", "LukaszEmotion")),
+    }
+    naive_attack = {
+        "StasNeut"   : compare_videos(videos[0], videos[5], 1.05, Path("results", "FrameComparison", "NaiveAttack", "StasNeutral")),
+        "StasEmot"   : compare_videos(videos[2], videos[7], 1.05, Path("results", "FrameComparison", "NaiveAttack", "StasEmotion")),
+        "LukaszNeut" : compare_videos(videos[4], videos[1], 1.05, Path("results", "FrameComparison", "NaiveAttack", "LukaszNeutral")),
+        "LukaszEmot" : compare_videos(videos[6], videos[3], 1.05, Path("results", "FrameComparison", "NaiveAttack", "LukaszEmotion")),
+    }
+    spoof_norm_attack = {
+        "StasNeut"   : compare_videos(videos[0], videos[0+8+1], 1.05, Path("results", "FrameComparison", "SpoofNormal", "StasNeutral")),
+        "StasEmot"   : compare_videos(videos[2], videos[2+8+1], 1.05, Path("results", "FrameComparison", "SpoofNormal", "StasEmotion")),
+        "LukaszNeut" : compare_videos(videos[4], videos[4+8+1], 1.05, Path("results", "FrameComparison", "SpoofNormal", "LukaszNeutral")),
+        "LukaszEmot" : compare_videos(videos[6], videos[6+8+1], 1.05, Path("results", "FrameComparison", "SpoofNormal", "LukaszEmotion")),
+    }
+    spoof_perf_attack = {
+        "StasNeut"   : compare_videos(videos[0], videos[0+8], 1.05, Path("results", "FrameComparison", "SpoofPerfect", "StasNeutral")),
+        "StasEmot"   : compare_videos(videos[2], videos[2+8], 1.05, Path("results", "FrameComparison", "SpoofPerfect", "StasEmotion")),
+        "LukaszNeut" : compare_videos(videos[4], videos[4+8], 1.05, Path("results", "FrameComparison", "SpoofPerfect", "LukaszNeutral")),
+        "LukaszEmot" : compare_videos(videos[6], videos[6+8], 1.05, Path("results", "FrameComparison", "SpoofPerfect", "LukaszEmotion")),
+    }
+    for type, plot_data in standard_usage.items():
+        np.savez_compressed(f'StandardUsage-{type}.npz', plot_data['x'], plot_data['y'])
+    for type, plot_data in naive_attack.items():
+        np.savez_compressed(f'NaiveAttack-{type}.npz', plot_data['x'], plot_data['y'])
+    for type, plot_data in spoof_norm_attack.items():
+        np.savez_compressed(f'SpoofNormal-{type}.npz', plot_data['x'], plot_data['y'])
+    for type, plot_data in spoof_perf_attack.items():
+        np.savez_compressed(f'SpoofPerfect-{type}.npz', plot_data['x'], plot_data['y'])
+
+
+def create_animated_graphs():
+    data_paths = [
+        Path("results", "EmbDiff", "NaiveAttack-LukaszEmot.npz"),
+        Path("results", "EmbDiff", "NaiveAttack-LukaszNeut.npz"),
+        Path("results", "EmbDiff", "NaiveAttack-StasEmot.npz"),
+        Path("results", "EmbDiff", "NaiveAttack-StasNeut.npz"),
+        Path("results", "EmbDiff", "SpoofNormal-LukaszEmot.npz"),
+        Path("results", "EmbDiff", "SpoofNormal-LukaszNeut.npz"),
+        Path("results", "EmbDiff", "SpoofNormal-StasEmot.npz"),
+        Path("results", "EmbDiff", "SpoofNormal-StasNeut.npz"),
+        Path("results", "EmbDiff", "SpoofPerfect-LukaszEmot.npz"),
+        Path("results", "EmbDiff", "SpoofPerfect-LukaszNeut.npz"),
+        Path("results", "EmbDiff", "SpoofPerfect-StasEmot.npz"),
+        Path("results", "EmbDiff", "SpoofPerfect-StasNeut.npz"),
+        Path("results", "EmbDiff", "StandardUsage-LukaszEmot.npz"),
+        Path("results", "EmbDiff", "StandardUsage-LukaszNeut.npz"),
+        Path("results", "EmbDiff", "StandardUsage-StasEmot.npz"),
+        Path("results", "EmbDiff", "StandardUsage-StasNeut.npz"),
+    ]
+    for data_path in data_paths:
+        p1, p2 = data_path.stem.split('-')
+        npdata = np.load(data_path)
+        dat_x = npdata['arr_0']
+        dat_y = npdata['arr_1']
+
+        fig = plt.figure()
+        l, = plt.plot([], [])
+        plt.xlabel('Numer klatki nagrania')
+        plt.ylabel('Odległość zakodowanych wektorów FaceNet')
+        plt.title(f'Odległości wektorów FaceNet dla dwóch kolejnych klatek nagrania.\nTryb: "{p1}"; Użytkownik: "{p2}"')
+        ax = plt.gca()
+        plt.yticks(np.arange(0, 1.1, 0.1))
+        plt.xlim(0, 300)
+
+        x_list = []
+        y_list = []
+        metadata = dict(title=data_path.stem, artist="264120")
+        writer = FFMpegWriter(fps=30, metadata=metadata)
+        with writer.saving(fig, f"{data_path.stem}.mp4", 100):
+            for idx in range(len(dat_x)):
+                x_list.append(dat_x[idx])
+                y_list.append(dat_y[idx])
+                l.set_data(x_list, y_list)
+                writer.grab_frame()
 
 
 if __name__ == "__main__":
-    video_path1 = Path().joinpath("data", "Videos", "SpoofEmotions.mov")
-    video_path2 = Path().joinpath("data", "Videos", "OriginalEmotions.mov")
-    compare_videos(video_path1, video_path2)
-
-# ========================== EXAMPLES ========================
-# labels, imgs = load_dataset_csv(Path().cwd().joinpath("file_label.csv"))
-# embeddings = []
-# for cropped_face in imgs:
-#     embeddings.append(get_embedding(cropped_face))
-# embeddings = np.asarray(embeddings)
-# np.savez_compressed('embeddings_faces.npz', embeddings, labels)
-
-# npdata = np.load('embeddings_faces.npz')
-# embeddings = npdata['arr_0']
-# labels = npdata['arr_1']
-# print(f"len: {len(embeddings)}")
-
-# print(f"DISTANCES:")
-# print(f"0 vs 5: {g_embedder.compute_distance(embeddings[0], embeddings[5])}")
-# print(f"10 vs 13: {g_embedder.compute_distance(embeddings[10], embeddings[13])}")
-# print(f"0 vs 13: {g_embedder.compute_distance(embeddings[0], embeddings[13])}")
-
-# plot_images(imgs, 10, 20)
-# plot_images([imgs[0], imgs[5]])
-# plot_images([imgs[10], imgs[13]])
-# plot_images([imgs[0], imgs[13]])
