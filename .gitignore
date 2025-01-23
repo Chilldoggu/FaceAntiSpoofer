@@ -5,3 +5,5 @@ venv*
 input/Videos
 bin/ffmpeg.exe
 results/FrameComparison
+results/SpfDetection-FrameComparison
+tmp

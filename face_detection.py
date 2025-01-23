@@ -2,6 +2,7 @@ import cv2
 import os
 import numpy as np
 import csv
+import subprocess
 from mtcnn.mtcnn import MTCNN
 from pathlib import Path
 from matplotlib import pyplot as plt
@@ -34,7 +35,7 @@ def extract_dataset_csv(csv_file: Path) -> tuple:
     return all_labels, all_results
 
 
-def extract_faces(img, img_path: Path, scale_fact = 1.3, bgr2rgb = True) -> tuple:
+def extract_faces(img, img_path: Path, scale_fact = 1.05, bgr2rgb = True) -> tuple:
     # face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
     # gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     # faces = face_cascade.detectMultiScale(gray, scale_fact, 4) # drugi parametr powinien być zkalibrowany w zależności od zdjęcia wejściowego
@@ -74,7 +75,7 @@ def get_embedding(face_img):
     return yhat[0]
 
 
-def compare_videos(video1: Path, video2: Path, scale_fact = 1.3, result_path = Path()):
+def compare_videos(video1: Path, video2: Path, scale_fact = 1.05, result_path = Path()):
     if not video1.exists():
         print(f"{video1} doesn't exist!")
     if not video2.exists():
@@ -108,9 +109,13 @@ def compare_videos(video1: Path, video2: Path, scale_fact = 1.3, result_path = P
 
         face1 = lface1[0]
         face2 = lface2[0]
-        emb_face1 = get_embedding(face1)
-        emb_face2 = get_embedding(face2)
-        diff = g_embedder.compute_distance(emb_face1, emb_face2)
+        diff = 0.0
+        if is_spoof(face1) or is_spoof(face2):
+            diff = 1.0
+        else:
+            emb_face1 = get_embedding(face1)
+            emb_face2 = get_embedding(face2)
+            diff = g_embedder.compute_distance(emb_face1, emb_face2)
         plot_data['x'].append(i)
         plot_data['y'].append(diff)
 
@@ -157,60 +162,52 @@ def process_videos():
 
     # Pierwsza osoba w ciągu znaków odpowiada użytkownikowi
     standard_usage = {
-        "StasNeut"   : compare_videos(videos[0], videos[1], 1.05, Path("results", "FrameComparison", "StandardUsage", "StasNeutral")),
-        "StasEmot"   : compare_videos(videos[2], videos[3], 1.05, Path("results", "FrameComparison", "StandardUsage", "StasEmotion")),
-        "LukaszNeut" : compare_videos(videos[4], videos[5], 1.05, Path("results", "FrameComparison", "StandardUsage", "LukaszNeutral")),
-        "LukaszEmot" : compare_videos(videos[6], videos[7], 1.05, Path("results", "FrameComparison", "StandardUsage", "LukaszEmotion")),
-    }
-    naive_attack = {
-        "StasNeut"   : compare_videos(videos[0], videos[5], 1.05, Path("results", "FrameComparison", "NaiveAttack", "StasNeutral")),
-        "StasEmot"   : compare_videos(videos[2], videos[7], 1.05, Path("results", "FrameComparison", "NaiveAttack", "StasEmotion")),
-        "LukaszNeut" : compare_videos(videos[4], videos[1], 1.05, Path("results", "FrameComparison", "NaiveAttack", "LukaszNeutral")),
-        "LukaszEmot" : compare_videos(videos[6], videos[3], 1.05, Path("results", "FrameComparison", "NaiveAttack", "LukaszEmotion")),
-    }
-    spoof_norm_attack = {
-        "StasNeut"   : compare_videos(videos[0], videos[0+8+1], 1.05, Path("results", "FrameComparison", "SpoofNormal", "StasNeutral")),
-        "StasEmot"   : compare_videos(videos[2], videos[2+8+1], 1.05, Path("results", "FrameComparison", "SpoofNormal", "StasEmotion")),
-        "LukaszNeut" : compare_videos(videos[4], videos[4+8+1], 1.05, Path("results", "FrameComparison", "SpoofNormal", "LukaszNeutral")),
-        "LukaszEmot" : compare_videos(videos[6], videos[6+8+1], 1.05, Path("results", "FrameComparison", "SpoofNormal", "LukaszEmotion")),
-    }
-    spoof_perf_attack = {
-        "StasNeut"   : compare_videos(videos[0], videos[0+8], 1.05, Path("results", "FrameComparison", "SpoofPerfect", "StasNeutral")),
-        "StasEmot"   : compare_videos(videos[2], videos[2+8], 1.05, Path("results", "FrameComparison", "SpoofPerfect", "StasEmotion")),
-        "LukaszNeut" : compare_videos(videos[4], videos[4+8], 1.05, Path("results", "FrameComparison", "SpoofPerfect", "LukaszNeutral")),
-        "LukaszEmot" : compare_videos(videos[6], videos[6+8], 1.05, Path("results", "FrameComparison", "SpoofPerfect", "LukaszEmotion")),
+        "StasNeut"   : compare_videos(videos[0], videos[1], 1.05, Path("results", "SpfDetection-FrameComparison", "StandardUsage", "StasNeutral")),
+        # "StasEmot"   : compare_videos(videos[2], videos[3], 1.05, Path("results", "SpfDetection-FrameComparison", "StandardUsage", "StasEmotion")),
+        "LukaszNeut" : compare_videos(videos[4], videos[5], 1.05, Path("results", "SpfDetection-FrameComparison", "StandardUsage", "LukaszNeutral")),
+        # "LukaszEmot" : compare_videos(videos[6], videos[7], 1.05, Path("results", "SpfDetection-FrameComparison", "StandardUsage", "LukaszEmotion")),
     }
     for type, plot_data in standard_usage.items():
-        np.savez_compressed(f'StandardUsage-{type}.npz', plot_data['x'], plot_data['y'])
+        np.savez_compressed(f'SpfDetection-StandardUsage-{type}.npz', plot_data['x'], plot_data['y'])
+    naive_attack = {
+        "StasNeut"   : compare_videos(videos[0], videos[5], 1.05, Path("results", "SpfDetection-FrameComparison", "NaiveAttack", "StasNeutral")),
+        # "StasEmot"   : compare_videos(videos[2], videos[7], 1.05, Path("results", "SpfDetection-FrameComparison", "NaiveAttack", "StasEmotion")),
+        "LukaszNeut" : compare_videos(videos[4], videos[1], 1.05, Path("results", "SpfDetection-FrameComparison", "NaiveAttack", "LukaszNeutral")),
+        # "LukaszEmot" : compare_videos(videos[6], videos[3], 1.05, Path("results", "SpfDetection-FrameComparison", "NaiveAttack", "LukaszEmotion")),
+    }
     for type, plot_data in naive_attack.items():
-        np.savez_compressed(f'NaiveAttack-{type}.npz', plot_data['x'], plot_data['y'])
+        np.savez_compressed(f'SpfDetection-NaiveAttack-{type}.npz', plot_data['x'], plot_data['y'])
+    spoof_norm_attack = {
+        "StasNeut"   : compare_videos(videos[0], videos[0+8+1], 1.05, Path("results", "SpfDetection-FrameComparison", "SpoofNormal", "StasNeutral")),
+        # "StasEmot"   : compare_videos(videos[2], videos[2+8+1], 1.05, Path("results", "SpfDetection-FrameComparison", "SpoofNormal", "StasEmotion")),
+        "LukaszNeut" : compare_videos(videos[4], videos[4+8+1], 1.05, Path("results", "SpfDetection-FrameComparison", "SpoofNormal", "LukaszNeutral")),
+        # "LukaszEmot" : compare_videos(videos[6], videos[6+8+1], 1.05, Path("results", "SpfDetection-FrameComparison", "SpoofNormal", "LukaszEmotion")),
+    }
     for type, plot_data in spoof_norm_attack.items():
-        np.savez_compressed(f'SpoofNormal-{type}.npz', plot_data['x'], plot_data['y'])
+        np.savez_compressed(f'SpfDetection-SpoofNormal-{type}.npz', plot_data['x'], plot_data['y'])
+    spoof_perf_attack = {
+        "StasNeut"   : compare_videos(videos[0], videos[0+8], 1.05, Path("results", "SpfDetection-FrameComparison", "SpoofPerfect", "StasNeutral")),
+        # "StasEmot"   : compare_videos(videos[2], videos[2+8], 1.05, Path("results", "SpfDetection-FrameComparison", "SpoofPerfect", "StasEmotion")),
+        "LukaszNeut" : compare_videos(videos[4], videos[4+8], 1.05, Path("results", "SpfDetection-FrameComparison", "SpoofPerfect", "LukaszNeutral")),
+        # "LukaszEmot" : compare_videos(videos[6], videos[6+8], 1.05, Path("results", "SpfDetection-FrameComparison", "SpoofPerfect", "LukaszEmotion")),
+    }
     for type, plot_data in spoof_perf_attack.items():
-        np.savez_compressed(f'SpoofPerfect-{type}.npz', plot_data['x'], plot_data['y'])
+        np.savez_compressed(f'SpfDetection-SpoofPerfect-{type}.npz', plot_data['x'], plot_data['y'])
 
 
 def create_animated_graphs():
     data_paths = [
-        Path("results", "EmbDiff", "NaiveAttack-LukaszEmot.npz"),
-        Path("results", "EmbDiff", "NaiveAttack-LukaszNeut.npz"),
-        Path("results", "EmbDiff", "NaiveAttack-StasEmot.npz"),
-        Path("results", "EmbDiff", "NaiveAttack-StasNeut.npz"),
-        Path("results", "EmbDiff", "SpoofNormal-LukaszEmot.npz"),
-        Path("results", "EmbDiff", "SpoofNormal-LukaszNeut.npz"),
-        Path("results", "EmbDiff", "SpoofNormal-StasEmot.npz"),
-        Path("results", "EmbDiff", "SpoofNormal-StasNeut.npz"),
-        Path("results", "EmbDiff", "SpoofPerfect-LukaszEmot.npz"),
-        Path("results", "EmbDiff", "SpoofPerfect-LukaszNeut.npz"),
-        Path("results", "EmbDiff", "SpoofPerfect-StasEmot.npz"),
-        Path("results", "EmbDiff", "SpoofPerfect-StasNeut.npz"),
-        Path("results", "EmbDiff", "StandardUsage-LukaszEmot.npz"),
-        Path("results", "EmbDiff", "StandardUsage-LukaszNeut.npz"),
-        Path("results", "EmbDiff", "StandardUsage-StasEmot.npz"),
-        Path("results", "EmbDiff", "StandardUsage-StasNeut.npz"),
+        Path("results", "EmbDiffData", "SpfDetection-NaiveAttack-LukaszNeut.npz"),
+        Path("results", "EmbDiffData", "SpfDetection-NaiveAttack-StasNeut.npz"),
+        Path("results", "EmbDiffData", "SpfDetection-SpoofNormal-LukaszNeut.npz"),
+        Path("results", "EmbDiffData", "SpfDetection-SpoofNormal-StasNeut.npz"),
+        Path("results", "EmbDiffData", "SpfDetection-SpoofPerfect-LukaszNeut.npz"),
+        Path("results", "EmbDiffData", "SpfDetection-SpoofPerfect-StasNeut.npz"),
+        Path("results", "EmbDiffData", "SpfDetection-StandardUsage-LukaszNeut.npz"),
+        Path("results", "EmbDiffData", "SpfDetection-StandardUsage-StasNeut.npz"),
     ]
     for data_path in data_paths:
-        p1, p2 = data_path.stem.split('-')
+        p0, p1, p2 = data_path.stem.split('-')
         npdata = np.load(data_path)
         dat_x = npdata['arr_0']
         dat_y = npdata['arr_1']
@@ -219,8 +216,7 @@ def create_animated_graphs():
         l, = plt.plot([], [])
         plt.xlabel('Numer klatki nagrania')
         plt.ylabel('Odległość zakodowanych wektorów FaceNet')
-        plt.title(f'Odległości wektorów FaceNet dla dwóch kolejnych klatek nagrania.\nTryb: "{p1}"; Użytkownik: "{p2}"')
-        ax = plt.gca()
+        plt.title(f'Detekcja spoofingu.\nTryb: "{p1}"; Użytkownik: "{p2}"')
         plt.yticks(np.arange(0, 1.1, 0.1))
         plt.xlim(0, 300)
 
@@ -236,5 +232,30 @@ def create_animated_graphs():
                 writer.grab_frame()
 
 
+def is_spoof(img):
+    def calc_hist(img):
+        histogram = [0] * 3
+        for j in range(3):
+            histr = cv2.calcHist([img], [j], None, [256], [0, 256])
+            histr *= 255.0 / histr.max()
+            histogram[j] = histr
+        return np.array(histogram)
+
+    img_ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCR_CB)
+    img_luv = cv2.cvtColor(img, cv2.COLOR_BGR2LUV)
+    ycrcb_hist = calc_hist(img_ycrcb)
+    luv_hist = calc_hist(img_luv)
+    feature_vector = np.append(ycrcb_hist.ravel(), luv_hist.ravel())
+    feature_vector = feature_vector.reshape(1, len(feature_vector))
+    p_fv = Path("tmp", 'feature_vec.npz')
+    np.savez_compressed(p_fv, feature_vector)
+
+    output = subprocess.call("%s %s %s" % (Path("venv37", "Scripts", "python.exe"), "spoof_detection.py", p_fv))
+    if output / 100 > 0.7:
+        return True
+    elif output / 100 <= 0.7:
+        return False
+    
+
 if __name__ == "__main__":
-    ...
+    create_animated_graphs()
